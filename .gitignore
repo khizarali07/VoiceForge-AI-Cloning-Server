@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+.cache/
+Qwen3-TTS-12Hz-0.6B-Base/*
+!Qwen3-TTS-12Hz-0.6B-Base/.gitkeep
+Qwen3-TTS-12Hz-0.6B-CustomVoice/*
+!Qwen3-TTS-12Hz-0.6B-CustomVoice/.gitkeep
+tts_models--multilingual--multi-dataset--xtts_v2/*
+!tts_models--multilingual--multi-dataset--xtts_v2/.gitkeep

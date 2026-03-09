@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+torch
+torchaudio
+transformers==4.57.3
+pydantic
+python-multipart
+scipy
+accelerate
+soundfile
+librosa
+imageio-ffmpeg
+TTS>=0.22.0
