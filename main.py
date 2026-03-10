@@ -597,15 +597,25 @@ class SpeechRequest(BaseModel):
 # Audio pre-processing
 # ─────────────────────────────────────────────
 def preprocess_reference_audio(audio_path: str) -> str:
-    """Decode, resample to 24 kHz mono, and trim to `MAX_REF_DURATION_SEC`."""
+    """Decode, VAD-trim, resample to 24 kHz mono, and trim to `MAX_REF_DURATION_SEC`."""
     print(f"  Pre-processing reference audio: {audio_path}")
     audio, sr = librosa.load(audio_path, sr=24000, mono=True)
     original_duration = len(audio) / sr
     print(f"  Original duration: {original_duration:.1f}s, sample rate: {sr}")
+
+    trimmed_audio, _ = librosa.effects.trim(audio, top_db=30)
+    if trimmed_audio.size > 0:
+        trimmed_duration = len(trimmed_audio) / sr
+        audio = trimmed_audio
+        print(f"  Silence trimmed duration: {trimmed_duration:.1f}s")
+    else:
+        print("  Silence trimming found no voiced region; using original audio")
+
     max_samples = int(MAX_REF_DURATION_SEC * sr)
     if len(audio) > max_samples:
         audio = audio[:max_samples]
         print(f"  Trimmed to {MAX_REF_DURATION_SEC}s")
+
     temp_path = audio_path + ".preprocessed.wav"
     sf.write(temp_path, audio, sr, format="WAV")
     print(f"  Saved preprocessed audio to: {temp_path}")
@@ -669,6 +679,19 @@ def _normalize_xtts_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.replace("\r", " ").replace("\n", " ")).strip()
 
 
+def _split_xtts_sentences(text: str) -> list[str]:
+    normalized = _normalize_xtts_text(text)
+    if not normalized:
+        return []
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?।])\s+", normalized)
+        if sentence.strip()
+    ]
+    return sentences or [normalized]
+
+
 def _word_wrap_text(text: str, max_chars: int) -> list[str]:
     words = text.split()
     if not words:
@@ -689,48 +712,12 @@ def _word_wrap_text(text: str, max_chars: int) -> list[str]:
 
 
 def _chunk_xtts_text(text: str, max_chars: int) -> list[str]:
-    normalized = _normalize_xtts_text(text)
-    if not normalized:
-        return []
-
-    sentence_parts = [
-        part.strip()
-        for part in re.split(r"(?<=[।!?॥])\s+|(?<=[.!?])\s+", normalized)
-        if part.strip()
-    ]
-    if not sentence_parts:
-        sentence_parts = [normalized]
-
     chunks: list[str] = []
-    current = ""
-
-    def flush_current() -> None:
-        nonlocal current
-        if current.strip():
-            chunks.append(current.strip())
-        current = ""
-
-    for part in sentence_parts:
-        clause_parts = [
-            piece.strip() for piece in re.split(r"(?<=[,;:])\s+", part) if piece.strip()
-        ]
-        if not clause_parts:
-            clause_parts = [part]
-
-        for piece in clause_parts:
-            if len(piece) > max_chars:
-                flush_current()
-                chunks.extend(_word_wrap_text(piece, max_chars))
-                continue
-
-            candidate = piece if not current else f"{current} {piece}"
-            if len(candidate) <= max_chars:
-                current = candidate
-            else:
-                flush_current()
-                current = piece
-
-    flush_current()
+    for sentence in _split_xtts_sentences(text):
+        if len(sentence) > max_chars:
+            chunks.extend(_word_wrap_text(sentence, max_chars))
+        else:
+            chunks.append(sentence)
     return chunks
 
 
@@ -759,38 +746,43 @@ def _run_xtts(text: str, ref_audio_path: str, language: str) -> tuple[np.ndarray
 
     tts_api = model_manager.get_xtts()
     max_chars = _get_xtts_max_chars(tts_api, lang)
-    chunks = _chunk_xtts_text(text, max_chars=max_chars)
-    if not chunks:
+    sentences = _split_xtts_sentences(text)
+    if not sentences:
         raise ValueError("Input text became empty after XTTS normalization.")
 
     print(
-        f"[xtts] Manual chunking enabled — {len(chunks)} chunk(s), max_chars={max_chars}"
+        f"[xtts] Sentence chunking enabled — {len(sentences)} sentence(s), max_chars={max_chars}"
     )
 
     audio_segments: list[np.ndarray] = []
     join_silence = np.zeros(int(24000 * XTTS_JOIN_SILENCE_MS / 1000), dtype=np.float32)
 
     with torch.no_grad():
-        for index, chunk in enumerate(chunks, start=1):
-            print(f"[xtts] Chunk {index}/{len(chunks)}: {chunk}")
-            wav = tts_api.tts(
-                text=chunk,
-                speaker_wav=ref_audio_path,
-                language=lang,
-                split_sentences=False,
-                enable_text_splitting=False,
-                speed=XTTS_TARGET_SPEED,
-                temperature=XTTS_TEMPERATURE,
-                top_k=XTTS_TOP_K,
-                top_p=XTTS_TOP_P,
-                repetition_penalty=XTTS_REPETITION_PENALTY,
-            )
-            chunk_audio = np.array(wav, dtype=np.float32)
-            if chunk_audio.size == 0:
-                continue
-            if audio_segments:
-                audio_segments.append(join_silence)
-            audio_segments.append(chunk_audio)
+        for sentence_index, sentence in enumerate(sentences, start=1):
+            sentence_chunks = _chunk_xtts_text(sentence, max_chars=max_chars)
+            for chunk_index, chunk in enumerate(sentence_chunks, start=1):
+                print(
+                    f"[xtts] Sentence {sentence_index}/{len(sentences)}"
+                    f" chunk {chunk_index}/{len(sentence_chunks)}: {chunk}"
+                )
+                wav = tts_api.tts(
+                    text=chunk,
+                    speaker_wav=ref_audio_path,
+                    language=lang,
+                    split_sentences=False,
+                    enable_text_splitting=False,
+                    speed=XTTS_TARGET_SPEED,
+                    temperature=XTTS_TEMPERATURE,
+                    top_k=XTTS_TOP_K,
+                    top_p=XTTS_TOP_P,
+                    repetition_penalty=XTTS_REPETITION_PENALTY,
+                )
+                chunk_audio = np.asarray(wav, dtype=np.float32)
+                if chunk_audio.size == 0:
+                    continue
+                if audio_segments:
+                    audio_segments.append(join_silence)
+                audio_segments.append(chunk_audio)
 
     if not audio_segments:
         raise RuntimeError("XTTSv2 produced no audio for the requested text.")
