@@ -26,6 +26,12 @@ import numpy as np
 import soundfile as sf
 import torchaudio
 
+try:
+    import noisereduce as nr
+except ImportError:
+    nr = None
+    print("[Startup] noisereduce not found — XTTS reference denoising disabled.")
+
 # torchaudio >= 2.6 defaults to torchcodec which requires a separate install.
 # Fall back to soundfile (already installed) when torchcodec is absent.
 try:
@@ -404,10 +410,10 @@ XTTS_SUPPORTED_LANGUAGES = {
 # Max reference audio duration (model only needs ~3s, 5s for safety)
 MAX_REF_DURATION_SEC = 5
 XTTS_TARGET_SPEED = 1.28
-XTTS_TEMPERATURE = 0.35
+XTTS_TEMPERATURE = 0.7
 XTTS_TOP_K = 20
 XTTS_TOP_P = 0.75
-XTTS_REPETITION_PENALTY = 6.0
+XTTS_REPETITION_PENALTY = 2.0
 XTTS_JOIN_SILENCE_MS = 60
 XTTS_CHUNK_MARGIN_CHARS = 24
 XTTS_MAX_CHARS_DEFAULT = 200
@@ -600,13 +606,28 @@ def preprocess_reference_audio(audio_path: str) -> str:
     """Decode, VAD-trim, resample to 24 kHz mono, and trim to `MAX_REF_DURATION_SEC`."""
     print(f"  Pre-processing reference audio: {audio_path}")
     audio, sr = librosa.load(audio_path, sr=24000, mono=True)
+    audio = np.asarray(audio, dtype=np.float32)
     original_duration = len(audio) / sr
     print(f"  Original duration: {original_duration:.1f}s, sample rate: {sr}")
+
+    if nr is not None:
+        denoised_audio = nr.reduce_noise(y=audio, sr=sr)
+        audio = np.asarray(denoised_audio, dtype=np.float32)
+        print("  Applied spectral noise reduction")
+    else:
+        print("  Skipped spectral noise reduction because noisereduce is unavailable")
+
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if peak > 0.0:
+        audio = audio / peak
+        print(f"  Peak-normalized audio (pre-normalization peak: {peak:.4f})")
+    else:
+        print("  Skipped peak normalization because audio peak was zero")
 
     trimmed_audio, _ = librosa.effects.trim(audio, top_db=30)
     if trimmed_audio.size > 0:
         trimmed_duration = len(trimmed_audio) / sr
-        audio = trimmed_audio
+        audio = np.asarray(trimmed_audio, dtype=np.float32)
         print(f"  Silence trimmed duration: {trimmed_duration:.1f}s")
     else:
         print("  Silence trimming found no voiced region; using original audio")

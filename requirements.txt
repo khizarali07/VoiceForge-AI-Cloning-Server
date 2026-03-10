@@ -9,5 +9,6 @@ scipy
 accelerate
 soundfile
 librosa
+noisereduce
 imageio-ffmpeg
 TTS>=0.22.0
