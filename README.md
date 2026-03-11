@@ -1,27 +1,37 @@
 # VoiceForge AI TTS Server
 
-Combined FastAPI TTS service for Qwen3-TTS and XTTSv2.
+A specialized, local-only Python FastAPI AI Voice Engine managing dual state-of-the-art TTS models: Qwen3-TTS and Coqui XTTSv2.
 
 ## What This App Does
 
-- Serves `POST /v1/audio/speech`
-- Serves `GET /health`
-- Serves `POST /admin/unload-models`
-- Uses a VRAM-aware model manager to hot-swap between Qwen and XTTS on limited GPU memory
+- Serves `POST /v1/audio/speech` for AI voice syntheses.
+- Serves `POST /admin/unload-models` for memory reclamation.
+- Features a sophisticated `VRAM-aware ModelManager` ensuring stable execution of concurrent AI structures on limited (e.g., 8 GB RTX 3070) GPU memory topologies by dynamically unmounting and bootstrapping checkpoints based on incoming queue demands.
+- Processes audio extensively via pre-conditioning flows: decoding, resampling strictly at 24kHz mono space, spectral denoising (`noisereduce`), VAD trimming, normalization, and enforcing strict 5-second embedding caps.
+- Auto-handles token limit calculations, auto-wrapping, and multi-chunk concatenation without crashing the GPU inference loop natively.
+
+## Core Dependencies
+
+- `fastapi`, `uvicorn`, `pydantic`
+- `torch`, `torchaudio`
+- `transformers==4.57.3`, `accelerate`
+- `TTS>=0.22.0` (Coqui XTTSv2 engine)
+- `librosa`, `scipy`, `soundfile`, `imageio-ffmpeg`
+- `noisereduce` (Spectral denoise optimization)
 
 ## First-Run Model Download Behavior
 
-- Qwen base downloads into `apps/fastapi/Qwen3-TTS-12Hz-0.6B-Base`
-- Qwen custom voice downloads into `apps/fastapi/Qwen3-TTS-12Hz-0.6B-CustomVoice`
-- Hugging Face cache is redirected into `apps/fastapi/.cache`
-- Coqui XTTS cache is redirected into `apps/fastapi`
+- Qwen base model downloads efficiently to `apps/fastapi/Qwen3-TTS-12Hz-0.6B-Base`.
+- Qwen custom-voice checkpoint downloads to `apps/fastapi/Qwen3-TTS-12Hz-0.6B-CustomVoice`.
+- Hugging Face cache maps intelligently to `apps/fastapi/.cache`.
+- Coqui XTTS cache points dynamically fully localized bypassing standard persistent profile paths.
 
-This keeps model storage inside the app folder instead of scattering it across user-profile cache locations.
+This guarantees models remain fully tethered to the app directory.
 
 ## Prerequisites
 
 - Python 3.10+
-- CUDA-enabled PyTorch recommended
+- CUDA-enabled PyTorch strongly recommended for functional operation speed.
 
 ## Install
 
@@ -39,6 +49,6 @@ venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Repo Notes
 
-- Do not commit downloaded model weights.
-- Keep only code, requirements, and documentation tracked.
-- `.gitkeep` files preserve the local model folders in a clean clone.
+- Keep the environment container (`venv/`) securely out of git scope.
+- Model directories dynamically bypass source tracks.
+- Adhere strictly to `.gitignore` principles locally keeping only code tracked.
